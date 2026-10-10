@@ -1,0 +1,161 @@
+name: Android build & release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'proudvocab-android/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'proudvocab-android/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish as a GitHub Release, e.g. 1.0.0 (leave empty to only build and keep the APK as a run artifact)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write   # needed to create the GitHub Release
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+        working-directory: proudvocab-android
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle (cache)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Pre-flight checks (resources, strings, permissions)
+        run: python3 tools/check_resources.py
+
+      - name: Compute version
+        id: ver
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"; RELEASE=true
+          elif [[ -n "$INPUT_VERSION" ]]; then
+            VERSION="${INPUT_VERSION#v}"; RELEASE=true
+          else
+            VERSION="1.0.${GITHUB_RUN_NUMBER}-dev"; RELEASE=false
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "versionCode=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "Version $VERSION (code $GITHUB_RUN_NUMBER), publish release: $RELEASE"
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          SECRET_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          SECRET_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SECRET_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          KS="$RUNNER_TEMP/release.jks"
+          if [[ -n "$KEYSTORE_BASE64" && -n "$SECRET_STORE_PASSWORD" && -n "$SECRET_KEY_ALIAS" && -n "$SECRET_KEY_PASSWORD" ]]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$KS"
+            {
+              echo "KEYSTORE_PATH=$KS"
+              echo "KEYSTORE_PASSWORD=$SECRET_STORE_PASSWORD"
+              echo "KEY_ALIAS=$SECRET_KEY_ALIAS"
+              echo "KEY_PASSWORD=$SECRET_KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "### Signing: using your permanent key from repository secrets" >> "$GITHUB_STEP_SUMMARY"
+          else
+            PASS="$(openssl rand -hex 16)"
+            echo "::add-mask::$PASS"
+            keytool -genkeypair -v -keystore "$KS" -alias proudvocab -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$PASS" -keypass "$PASS" -dname "CN=ProudVocab, O=ProudVocab, C=US" > /dev/null 2>&1
+            {
+              echo "KEYSTORE_PATH=$KS"
+              echo "KEYSTORE_PASSWORD=$PASS"
+              echo "KEY_ALIAS=proudvocab"
+              echo "KEY_PASSWORD=$PASS"
+            } >> "$GITHUB_ENV"
+            {
+              echo "### Signing: TEMPORARY key"
+              echo "No signing secrets were found, so this APK is signed with a key created just for this run."
+              echo "Android refuses to update an app signed with a different key, so every build would have to be installed after uninstalling the previous one (which erases its data)."
+              echo "Run the **Generate signing keystore** workflow once and add the 4 secrets to fix this permanently (see README)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Unit tests
+        run: |
+          chmod +x ./gradlew
+          sed -i 's/\r$//' ./gradlew   # in case the file was uploaded with Windows line endings
+          ./gradlew --no-daemon --stacktrace testDebugUnitTest 2>&1 | tee "$RUNNER_TEMP/test.log"
+
+      - name: Build release APK
+        run: |
+          ./gradlew --no-daemon --stacktrace assembleRelease \
+            -PversionName="${{ steps.ver.outputs.version }}" \
+            -PversionCode="${{ steps.ver.outputs.versionCode }}" 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Verify the APK (signature, minSdk, permissions)
+        run: |
+          APK="$(ls app/build/outputs/apk/release/*.apk | head -1)"
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          echo "APK: $APK"; ls -lh "$APK"
+          "$BT/apksigner" verify --verbose "$APK" | head -8
+          BADGING="$("$BT/aapt2" dump badging "$APK")"
+          echo "$BADGING" | grep -E "^package:|^sdkVersion|^targetSdkVersion|^uses-permission" || true
+          echo "$BADGING" | grep -q "^sdkVersion:'28'" || { echo "::error::minSdk is not 28 (Android 9)"; exit 1; }
+          PERMS="$(echo "$BADGING" | grep "^uses-permission" | sed -E "s/.*name='([^']+)'.*/\1/" | grep -v 'DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION' | sort -u | tr '\n' ' ')"
+          echo "Declared permissions: $PERMS"
+          [[ "$PERMS" == "android.permission.INTERNET " ]] || { echo "::error::Unexpected permissions: $PERMS"; exit 1; }
+          mkdir -p dist
+          cp "$APK" "dist/ProudVocab-v${{ steps.ver.outputs.version }}.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProudVocab-v${{ steps.ver.outputs.version }}
+          path: proudvocab-android/dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload logs and reports when something failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-logs
+          path: |
+            ${{ runner.temp }}/test.log
+            ${{ runner.temp }}/build.log
+            proudvocab-android/app/build/reports/**
+            proudvocab-android/app/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: steps.ver.outputs.release == 'true' && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: ProudVocab ${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          files: proudvocab-android/dist/*.apk

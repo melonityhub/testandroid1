@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        The ONLY permission the app declares. It is a "normal" permission (granted at install, no runtime prompt)
+        and is used for word translation / dictionary lookups.
+
+        Deliberately NOT requested:
+        - READ/WRITE_EXTERNAL_STORAGE, READ_MEDIA_VIDEO: videos/subtitles are picked with the system file picker
+          (Storage Access Framework), which grants access only to the files the user selects.
+        - POST_NOTIFICATIONS, RECORD_AUDIO, CAMERA, LOCATION, CONTACTS: not needed by any feature.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Android 11+ package visibility: required to bind to the device's text-to-speech engine. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".ProudVocabApp"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:localeConfig="@xml/locales_config"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
+        android:theme="@style/Theme.ProudVocab">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|uiMode|layoutDirection|density|fontScale|locale"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
