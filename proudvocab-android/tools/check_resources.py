@@ -61,7 +61,10 @@ for f in kt:
     code_only = "\n".join(l for l in t.splitlines() if not l.strip().startswith(("*", "//", "/*")))
     if re.search(r"import\s+org\.json|org\.json\.", code_only): errors.append(f"org.json used in {rel} (stubbed in JVM unit tests; use core.Json)")
     if re.search(r"READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|MANAGE_EXTERNAL_STORAGE", t): errors.append(f"storage permission referenced in {rel}")
-perm = re.findall(r'uses-permission android:name="([^"]+)"', man)
+TOOLS = "{http://schemas.android.com/tools}node"
+perm = [e.get("{http://schemas.android.com/apk/res/android}name")
+        for e in ET.parse(app / "AndroidManifest.xml").getroot().iter("uses-permission")
+        if e.get(TOOLS) != "remove"]
 if perm != ["android.permission.INTERNET"]:
     errors.append(f"unexpected permissions in manifest: {perm}")
 

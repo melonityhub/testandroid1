@@ -121,8 +121,10 @@ jobs:
           echo "APK: $APK"; ls -lh "$APK"
           "$BT/apksigner" verify --verbose "$APK" | head -8
           BADGING="$("$BT/aapt2" dump badging "$APK")"
-          echo "$BADGING" | grep -E "^package:|^sdkVersion|^targetSdkVersion|^uses-permission" || true
-          echo "$BADGING" | grep -q "^sdkVersion:'28'" || { echo "::error::minSdk is not 28 (Android 9)"; exit 1; }
+          echo "$BADGING" | grep -E "^package:|^sdkVersion|^minSdkVersion|^targetSdkVersion|^uses-permission" || true
+          MINSDK="$(echo "$BADGING" | sed -nE "s/^(minSdkVersion|sdkVersion):'([0-9]+)'.*/\2/p" | head -1)"
+          echo "minSdk detected: ${MINSDK:-none}"
+          [[ "$MINSDK" == "28" ]] || { echo "::error::minSdk is '${MINSDK:-unknown}', expected 28 (Android 9)"; exit 1; }
           PERMS="$(echo "$BADGING" | grep "^uses-permission" | sed -E "s/.*name='([^']+)'.*/\1/" | grep -v 'DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION' | sort -u | tr '\n' ' ')"
           echo "Declared permissions: $PERMS"
           [[ "$PERMS" == "android.permission.INTERNET " ]] || { echo "::error::Unexpected permissions: $PERMS"; exit 1; }

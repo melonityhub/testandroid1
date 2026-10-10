@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
         The ONLY permission the app declares. It is a "normal" permission (granted at install, no runtime prompt)
@@ -11,6 +12,9 @@
         - POST_NOTIFICATIONS, RECORD_AUDIO, CAMERA, LOCATION, CONTACTS: not needed by any feature.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Media3/ExoPlayer merges this one in for network-type bandwidth hints; the app only plays local files, so drop it. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
 
     <!-- Android 11+ package visibility: required to bind to the device's text-to-speech engine. -->
     <queries>
